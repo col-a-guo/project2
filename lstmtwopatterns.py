@@ -7,6 +7,7 @@ from aeon.datasets import load_classification
 from sklearn.preprocessing import LabelEncoder
 import matplotlib.pyplot as plt
 import itertools  # For hyperparameter combinations
+from prettytable import PrettyTable
 
 # Load the data
 X, y = load_classification("TwoPatterns")
@@ -54,7 +55,7 @@ def preprocess_data(X, y, window_size, test_size=0.2, random_state=42):
     X_windowed = np.array(X_windowed)
 
     # Split into train and test sets
-    X_train, X_test, y_train, y_test = train_test_split(X_windowed, y, test_size=test_size, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X_windowed, y, test_size=test_size, random_state=random_state)
 
     # Convert labels to numerical values using LabelEncoder
     label_encoder = LabelEncoder()
@@ -69,6 +70,7 @@ def preprocess_data(X, y, window_size, test_size=0.2, random_state=42):
 
     return X_train, X_test, y_train, y_test, len(label_encoder.classes_)
 
+
 # Define the LSTM model
 class LSTMModel(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, num_classes, dropout):
@@ -79,17 +81,17 @@ class LSTMModel(nn.Module):
         self.fc = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
-      # Set initial states
-      h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-      c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        # Initialize hidden state
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
 
-      # Forward propagate LSTM
-      out, _ = self.lstm(x, (h0, c0))
+        # LSTM layer
+        out, _ = self.lstm(x, (h0, c0))
 
-      # Decode the hidden state of the last time step
-      out = self.fc(out[:, -1, :])  # Taking the last time step
+        # Decode the hidden state of the last time step
+        out = self.fc(out[:, -1, :])
 
-      return out
+        return out
 
 # Training loop function (to avoid code duplication)
 def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, device, epochs=50, patience=10):  # Reduced epochs for quicker testing
@@ -164,13 +166,12 @@ def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, d
     return accuracy, train_losses, val_losses
 
 # Hyperparameter search space - LSTM specific params
-hidden_size = 100
-optimizer_name = 'adam'  # Keeping these fixed
-dropout = 0.2
+hidden_size_options = [50, 100]
+optimizer_options = ['adam', 'SGD']
+dropout = 0.2  # Fixed dropout
 
-num_layers_options = [1, 2, 3, 4]
-window_size_options = [64, 128]  # Example window sizes - adjust as needed
-
+num_layers_options = [2, 3, 4]
+window_size = 128  # Fixed window_size
 
 # Hyperparameter Search Loop
 best_accuracy = 0
@@ -178,10 +179,14 @@ best_hyperparameters = None
 all_results = []
 
 # Generate all combinations of hyperparameters
-param_combinations = list(itertools.product(num_layers_options, window_size_options))
+param_combinations = list(itertools.product(hidden_size_options, optimizer_options, num_layers_options))
 
-for num_layers, window_size in param_combinations:
-    print(f"Training with num_layers={num_layers}, window_size={window_size}")
+# Set up PrettyTable
+table = PrettyTable()
+table.field_names = ["hidden_size", "optimizer", "num_layers", "window_size", "dropout", "Accuracy"]
+
+for hidden_size, optimizer_name, num_layers in param_combinations:
+    print(f"Training with hidden_size={hidden_size}, optimizer={optimizer_name}, num_layers={num_layers}, window_size={window_size}, dropout={dropout}")
     batch_size=32
 
     # Preprocess the data with the current window size
@@ -200,7 +205,7 @@ for num_layers, window_size in param_combinations:
     criterion = nn.CrossEntropyLoss()
     if optimizer_name == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=0.005)
-    elif optimizer_name == 'sgd':
+    elif optimizer_name == 'SGD':
         optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_name}")
@@ -217,25 +222,32 @@ for num_layers, window_size in param_combinations:
 
     # Store results
     results = {
+        "hidden_size": hidden_size,
+        "optimizer": optimizer_name,
         "num_layers": num_layers,
         "window_size": window_size,
+        "dropout": dropout,
         "accuracy": accuracy,
-        "train_losses": train_losses,
-        "val_losses": val_losses,
     }
     all_results.append(results)
+
+    # Add results to the table
+    table.add_row([hidden_size, optimizer_name, num_layers, window_size, dropout, f"{accuracy:.2f}%"])
 
     # Update best accuracy
     if accuracy > best_accuracy:
         best_accuracy = accuracy
-        best_hyperparameters = {"num_layers": num_layers, "window_size": window_size}
+        best_hyperparameters = {"hidden_size": hidden_size, "optimizer": optimizer_name, "num_layers": num_layers, "window_size": window_size, "dropout": dropout}
 
 print("Hyperparameter Search Complete")
 print(f"Best Hyperparameters: {best_hyperparameters}, Best Accuracy: {best_accuracy:.2f}%")
 
+print(table) # Print the PrettyTable
+
 # Plotting (Example - you might want to plot multiple results)
 # Choose which run to plot - e.g., the best one
-best_result = next(item for item in all_results if item["num_layers"] == best_hyperparameters["num_layers"] and item["window_size"] == best_hyperparameters["window_size"])
+best_result = next(item for item in all_results if item["hidden_size"] == best_hyperparameters["hidden_size"] and item["optimizer"] == best_hyperparameters["optimizer"] and item["num_layers"] == best_hyperparameters["num_layers"] and item["window_size"] == best_hyperparameters["window_size"] and item["dropout"] == best_hyperparameters["dropout"])
+
 # Plotting training and validation loss
 plt.figure(figsize=(10, 5))
 plt.plot(best_result["train_losses"], label='Training Loss')

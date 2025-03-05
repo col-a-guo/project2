@@ -8,6 +8,8 @@ from aeon.datasets import load_classification
 from sklearn.preprocessing import LabelEncoder
 import matplotlib.pyplot as plt
 import itertools  # For hyperparameter combinations
+from sklearn.metrics import classification_report
+
 
 # Load the data
 X, y = load_classification("TwoPatterns")
@@ -48,11 +50,11 @@ def preprocess_data(X, y, test_size=0.2, random_state=42):
     y_train = torch.tensor(y_train, dtype=torch.long)  # Use long for labels
     y_test = torch.tensor(y_test, dtype=torch.long)
 
-    return X_train, X_test, y_train, y_test, len(label_encoder.classes_)
+    return X_train, X_test, y_train, y_test, len(label_encoder.classes_), label_encoder.classes_
 
 
 # Preprocess the data
-X_train, X_test, y_train, y_test, num_classes = preprocess_data(X, y)
+X_train, X_test, y_train, y_test, num_classes, class_names = preprocess_data(X, y)
 
 print("Shape of X_train:", X_train.shape)
 print("Shape of X_test:", X_test.shape)
@@ -108,12 +110,12 @@ class CNN(nn.Module):
 
 # Hyperparameter search space
 num_layers_options = [4]
-kernel_size_options = [6, 5, 4]
+kernel_size_options = [4]
 neuron_multiplier_options = [2]
 optimizer_options = ['adam', 'sgd']
 
 # Training loop function (to avoid code duplication)
-def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, device, epochs=50, patience=10):  # Reduced epochs for quicker testing
+def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, device, class_names, epochs=50, patience=10):  # Reduced epochs for quicker testing
     best_loss = float('inf')
     counter = 0
     train_losses = []
@@ -168,8 +170,21 @@ def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, d
 
     model.load_state_dict(torch.load('best_model.pth'))
 
-    # Evaluation
+    # Evaluation and Classification Report
     model.eval()
+    y_true = []
+    y_pred = []
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            y_true.extend(labels.cpu().numpy())
+            y_pred.extend(predicted.cpu().numpy())
+
+    print(classification_report(y_true, y_pred, target_names=class_names))  # Output Classification Report
+
+
     correct = 0
     total = 0
     with torch.no_grad():
@@ -182,6 +197,7 @@ def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, d
 
     accuracy = 100 * correct / total
     print(f"Accuracy on the test set: {accuracy:.2f}%")
+
     return accuracy, train_losses, val_losses
 
 
@@ -222,7 +238,7 @@ for num_layers, kernel_size, neuron_multiplier, optimizer_name in param_combinat
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Train and evaluate the model
-    accuracy, train_losses, val_losses = train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, device)
+    accuracy, train_losses, val_losses = train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, device, class_names)
 
     # Store results
     results = {
