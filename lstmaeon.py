@@ -78,7 +78,7 @@ class LSTMModel(nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout)
         self.fc = nn.Linear(hidden_size, num_classes)
 
-    def forward(self, self, x):
+    def forward(self, x):
       # Set initial states
       h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
       c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
@@ -169,7 +169,7 @@ optimizer_name = 'adam'  # Keeping these fixed
 dropout = 0.2
 
 num_layers_options = [1, 2, 3, 4]
-window_size_options = [50, 100, 150, 200, 284]  # Example window sizes - adjust as needed
+window_size_options = [64, 128]  # Example window sizes - adjust as needed
 
 
 # Hyperparameter Search Loop
