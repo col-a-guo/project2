@@ -12,39 +12,34 @@ from itertools import product
 from prettytable import PrettyTable
 import matplotlib.pyplot as plt
 
-# Check for CUDA availability
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# 1. Load the data using sktime
 train_X, train_y = load_from_tsfile_to_dataframe("IEEEPPG_TRAIN.ts")
 test_X, test_y = load_from_tsfile_to_dataframe("IEEEPPG_TEST.ts")
 
-# Explicitly convert to numeric type (float64 is a good choice)
 train_y = train_y.astype(np.float64)
 test_y = test_y.astype(np.float64)
 
-# 2. Hyperparameter Grid
 param_grid = {
     'num_filters': [16, 32],
-    'kernel_size': [(1, 3), (3, 3)],  # Added more kernel size options
+    'kernel_size': [(1, 3), (3, 3)],
     'optimizer': ['Adam'],
-    'learning_rate': [0.001],  # Added learning rate to hyperparameter grid
+    'learning_rate': [0.001],
     'padding': ['same'],
     'stride': [1],
     'num_layers': [1, 2],
     'neurons_per_layer': [32, 64]
 }
 
-# Generate all possible combinations of hyperparameters
 param_combinations = list(product(*param_grid.values()))
 param_names = list(param_grid.keys())
 
 def preprocess_data(X):
     X_flat = np.array([series.values for series in X[X.columns[0]]])
-    # X_flat is now (num_samples, 200, 5)
+    # (num_samples, 200, 5)
 
-    # Reshape the input to (batch_size, channels, height, width) for 2D CNN
+    # (batch_size, channels, height, width) for 2D CNN
     X_reshaped = X_flat.reshape(X_flat.shape[0], 5, 1, 200)  # Correct Reshape
 
     return X_reshaped, None  #No scaling needed
