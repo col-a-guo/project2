@@ -1,103 +1,192 @@
-
-from ucimlrepo import fetch_ucirepo 
 import pandas as pd
 import numpy as np
+from sktime.datasets import load_from_tsfile_to_dataframe
+from sklearn.preprocessing import StandardScaler  # Changed to StandardScaler
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset, Dataset
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
-import copy
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from sklearn.metrics import mean_squared_error, r2_score
+from itertools import product
+from prettytable import PrettyTable
+
+# Check for CUDA availability
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+# 1. Load the data using sktime
+train_X, train_y = load_from_tsfile_to_dataframe("FloodModeling1_TRAIN.ts")
+test_X, test_y = load_from_tsfile_to_dataframe("FloodModeling1_TEST.ts")
+
+# Explicitly convert to numeric type (float64 is a good choice)
+train_y = train_y.astype(np.float64)
+test_y = test_y.astype(np.float64)
+
+# 2. Hyperparameter Grid
+param_grid = {
+    'hidden_size': [25, 50],  # Neuron count
+    'num_layers': [1, 2],  # Number of LSTM layers
+    'optimizer': ['Adam', 'SGD'],  # Optimizer
+    'window_size': [133, 266] # Window Size
+}
+
+# Generate all possible combinations of hyperparameters
+param_combinations = list(product(*param_grid.values()))
+param_names = list(param_grid.keys())
 
 
-# fetch dataset 
-appliances_energy_prediction = fetch_ucirepo(id=374) 
-  
-# data (as pandas dataframes) 
-X = appliances_energy_prediction.data.features 
-y = appliances_energy_prediction.data.targets 
-print(appliances_energy_prediction.variables)
-df = pd.concat([X, y], axis=1)
+# Function to preprocess data with variable window size
+def preprocess_data(X, window_size):
+    X_flat = np.array([series.values.flatten() for series in X[X.columns[0]]])
+    scaler = StandardScaler()  # Changed to StandardScaler
+    X_scaled = scaler.fit_transform(X_flat)
 
-df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d%H:%M:%S', errors='coerce')
-# variable information 
+    # Handle cases where window_size is larger than the series length
+    series_length = X[X.columns[0]].iloc[0].shape[0]
+    if window_size > series_length:
+        window_size = series_length
+        print(f"Warning: window_size exceeds series length.  Using window_size = {window_size}")
 
+    X_reshaped = X_scaled.reshape(X_scaled.shape[0], window_size, X_scaled.shape[1] // window_size)  # Reshape for LSTM
 
-df['year'] = df['date'].dt.year
-df['month'] = df['date'].dt.month
-df['day'] = df['date'].dt.day
-df['decimal_hour'] = df['date'].dt.hour + df['date'].dt.minute / 60
-print(df.head(10))
-
-clean_df = df.drop(columns=['date'])
-y = clean_df['Appliances']
-X = clean_df.drop(columns=['Appliances'])
-print("Shape of X = ", X.shape)
-print("Shape of y = ", y.shape)
-
-def preprocess_data(X, y, test_size=0.2, random_state=42):
-    """
-    Preprocesses the time series data for CNN training.
-
-    Args:
-        X: Input time series data (aeon format).
-        y: Target labels.
-        test_size: Proportion of data for testing.
-        random_state: Random seed for splitting.
-
-    Returns:
-        Tuple: (X_train, X_test, y_train, y_test) as PyTorch Tensors.
-    """
-    # Aeon data format is (n_samples, n_channels, time_series_length)
-    # Convert to numpy array
-    X = X.to_numpy()
-    y = y.to_numpy()
-    # Split into train and test sets
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
+    return X_reshaped, scaler
 
 
-    # Convert to PyTorch tensors
-    X_train = torch.tensor(X_train, dtype=torch.float32)
-    X_test = torch.tensor(X_test, dtype=torch.float32)
-    y_train = torch.tensor(y_train, dtype=torch.long)  # Use long for labels
-    y_test = torch.tensor(y_test, dtype=torch.long)
+# 3. Define the LSTM Model in PyTorch
+class LSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, output_size):
+        super(LSTMModel, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)  # Added dropout
+        self.fc = nn.Linear(hidden_size, output_size)
 
-    # X_train = X_train.view(-1, 1, 1, 31)
-    # X_test = X_test.view(-1, 1, 1, 31)
-    return X_train, X_test, y_train, y_test
+    def forward(self, x):
+        # Initialize hidden state
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)  # Move to correct device
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)  # Move to correct device
 
+        # Forward propagate LSTM
+        out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size)
 
-# Preprocess the data
-
-X_train, X_test, y_train, y_test= preprocess_data(X, y)
-
-print("Shape of X_train:", X_train.shape)
-print("Shape of X_test:", X_test.shape)
-print("Shape of y_train:", y_train.shape)
-print("Shape of y_test:", y_test.shape)
-
-
-window_size = 10
-
-class EnergyDataset(Dataset):
-    def __init__(self, X, y, window_size):
-        self.X = X
-        self.y = y
-        self.window_size = window_size
-
-    def __len__(self):
-        return len(self.X) - self.window_size
-
-    def __getitem__(self, idx):
-        X_seq = self.X[idx:idx + self.window_size]
-        y_seq = self.y[idx + self.window_size]
-        return torch.tensor(X_seq, dtype=torch.float32), torch.tensor(y_seq, dtype=torch.float32)
+        # Decode the hidden state of the last time step
+        out = self.fc(out[:, -1, :])
+        return out
 
 
-train_dataset = EnergyDataset(X_train, y_train, window_size)
-test_dataset = EnergyDataset(X_test, y_test, window_size)
+# 4. Hyperparameter Tuning Loop
+best_mse = float('inf')
+best_params = None
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-print(torch.cuda.is_available())
+# Create a table to store the results
+table = PrettyTable()
+table.field_names = param_names + ["MSE"]
+
+results = [] #List to store results for the final table
+
+for i, params in enumerate(param_combinations):
+    # Unpack hyperparameters
+    hidden_size, num_layers, optimizer_name, window_size = params
+
+    print(f"Starting training with parameter combination {i+1}/{len(param_combinations)}:")
+    for name, value in zip(param_names, params):
+        print(f"\t{name}: {value}")
+
+    # Preprocess data with the current window size
+    train_X_processed, train_scaler = preprocess_data(train_X, window_size)
+    test_X_processed, test_scaler = preprocess_data(test_X, window_size)
+
+    # Scale the target variables
+    target_scaler = StandardScaler()  # Changed to StandardScaler
+    train_y_scaled = target_scaler.fit_transform(train_y.reshape(-1, 1))
+    test_y_scaled = target_scaler.transform(test_y.reshape(-1, 1))
+
+    # Convert numpy arrays to torch tensors
+    train_X_tensor = torch.tensor(train_X_processed, dtype=torch.float32).to(device)
+    test_X_tensor = torch.tensor(test_X_processed, dtype=torch.float32).to(device)
+    train_y_tensor = torch.tensor(train_y_scaled, dtype=torch.float32).to(device)
+    test_y_tensor = torch.tensor(test_y_scaled, dtype=torch.float32).to(device)
+
+    # Create the model
+    input_size = train_X_tensor.shape[2]  # Features
+    output_size = 1
+    model = LSTMModel(input_size, hidden_size, num_layers, output_size).to(device)
+
+    # Define optimizer
+    if optimizer_name == 'Adam':
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
+    else:
+        optimizer = optim.SGD(model.parameters(), lr=0.01)
+
+    criterion = nn.MSELoss()
+
+    # DataLoader
+    batch_size = 32
+    train_dataset = torch.utils.data.TensorDataset(train_X_tensor, train_y_tensor)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    # Training loop with early stopping
+    num_epochs = 20  # Reduced epochs for tuning
+    patience = 5
+    best_val_loss = float('inf')
+    counter = 0
+
+    for epoch in range(num_epochs):
+        model.train()
+        for inputs, labels in train_loader:
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        # Validation step (using test set for simplicity in this example)
+        model.eval()
+        with torch.no_grad():
+            val_outputs = model(test_X_tensor)
+            val_loss = criterion(val_outputs, test_y_tensor)
+        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}, Validation Loss: {val_loss.item():.4f}')
+
+        # Early stopping
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            counter = 0
+        else:
+            counter += 1
+            if counter >= patience:
+                print("Early stopping triggered")
+                break
+
+
+    # 5. Evaluate and Store Results
+    model.eval()
+    with torch.no_grad():
+        predicted_scaled = model(test_X_tensor)
+        predicted_scaled_cpu = predicted_scaled.cpu().numpy()
+        test_y_cpu = test_y_tensor.cpu().numpy()
+
+    predicted = target_scaler.inverse_transform(predicted_scaled_cpu)
+    test_y_original = target_scaler.inverse_transform(test_y_cpu)
+
+    mse = mean_squared_error(test_y, predicted)
+
+    print(f"MSE: {mse:.4f}")
+
+    #Add the results to the table
+    results.append(list(params) + [mse])
+
+    if mse < best_mse:
+        best_mse = mse
+        best_params = params
+        print(f"New best MSE: {best_mse:.4f} with parameters: {best_params}")
+
+print("\nHyperparameter Tuning Complete!")
+print(f"Best MSE: {best_mse:.4f}")
+print(f"Best Parameters: {best_params}")
+
+
+#Add rows to the PrettyTable
+for row in results:
+    table.add_row(row)
+
+print(table) #Print the full table
