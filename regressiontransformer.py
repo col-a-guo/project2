@@ -10,12 +10,9 @@ import matplotlib.pyplot as plt  # Import for plotting
 
 from sktime.datasets import load_from_tsfile_to_dataframe
 
-
-# Check for CUDA availability
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# 1. Load the data using sktime
 try:
     train_X, train_y = load_from_tsfile_to_dataframe("IEEEPPG_TRAIN.ts")
     test_X, test_y = load_from_tsfile_to_dataframe("IEEEPPG_TEST.ts")
@@ -24,7 +21,6 @@ except FileNotFoundError:
     exit()
 
 
-# 2. Preprocessing: Convert data to numpy arrays and handle labels
 def preprocess_data(train_X, train_y, test_X, test_y):
     """
     Preprocesses the time series data, converts to numpy arrays,
@@ -39,7 +35,7 @@ def preprocess_data(train_X, train_y, test_X, test_y):
     Returns:
         train_X_padded, train_y_scaled, test_X_padded, test_y_scaled, max_len
     """
-    # Convert pandas DataFrames to lists of numpy arrays
+
     train_X_np = [np.array(series).reshape(5, 200).transpose(1, 0) for series in train_X.iloc[:, 0]]  # Reshape to (200, 5)
     test_X_np = [np.array(series).reshape(5, 200).transpose(1, 0) for series in test_X.iloc[:, 0]]  # Reshape to (200, 5)
 
@@ -64,8 +60,6 @@ def preprocess_data(train_X, train_y, test_X, test_y):
 train_X_padded, train_y_scaled, test_X_padded, test_y_scaled, max_len, target_scaler = preprocess_data(train_X, train_y, test_X, test_y)
 
 
-
-# 3. Define the Dataset
 class TimeSeriesDataset(Dataset):
     def __init__(self, X, y):
         self.X = torch.tensor(X, dtype=torch.float32)
@@ -77,11 +71,10 @@ class TimeSeriesDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-# 4. Create DataLoaders
 batch_size = 32
 train_dataset = TimeSeriesDataset(train_X_padded, train_y_scaled)
 
-# Create a validation set
+#val set
 train_X_split, val_X_split, train_y_split, val_y_split = train_test_split(
     train_X_padded, train_y_scaled, test_size=0.2, random_state=42
 )
@@ -94,8 +87,6 @@ val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) # No 
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 
-
-# 5. Define the Transformer Model for Regression
 class TimeSeriesTransformerRegression(nn.Module):
     def __init__(self, input_size, d_model=64, nhead=4, num_layers=2, dropout=0.1):
         super().__init__()
@@ -138,8 +129,6 @@ class TimeSeriesTransformerRegression(nn.Module):
         x = self.fc(x)  # (batch_size, 1)
         return x.squeeze() #remove the extra dimension
 
-
-# Positional Encoding (same as before)
 class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
@@ -161,17 +150,15 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(1)]
         return self.dropout(x)
 
-# 6. Instantiate Model, Loss, and Optimizer
 input_size = 5  # Input size is now 5 (height)
 d_model = 64 # Reduced d_model for faster training and potentially better generalization
 nhead = 4
 num_layers = 2
 
 model = TimeSeriesTransformerRegression(input_size=input_size, d_model=d_model, nhead=nhead, num_layers=num_layers).to(device)  # Instantiate model
-criterion = nn.MSELoss()  # Use Mean Squared Error for regression
-optimizer = optim.Adam(model.parameters(), lr=0.001)  # Reduced learning rate
+criterion = nn.MSELoss()  # MSE for regression
+optimizer = optim.Adam(model.parameters(), lr=0.001)  
 
-# 7. Training Loop with Early Stopping
 num_epochs = 50
 patience = 5  # Number of epochs to wait for improvement
 best_val_loss = float('inf')
@@ -221,11 +208,11 @@ for epoch in range(num_epochs):
             model.load_state_dict(best_model_state)  # Load the best model
             break
 
-# Load the best model if early stopping occurred before the last epoch
+
 if epochs_no_improve > 0:
     model.load_state_dict(best_model_state)
 
-# 8. Evaluation
+
 model.eval()
 total_loss = 0
 with torch.no_grad():
@@ -238,7 +225,6 @@ with torch.no_grad():
 avg_loss = total_loss / len(test_loader)
 print(f"Average MSE Loss on the test set: {avg_loss}")
 
-# 9. (Optional) Make predictions on new data and inverse transform
 def predict(model, data, device, scaler):
     """
     Predicts the target variable for new time series data and inverse transforms the predictions.
@@ -266,7 +252,7 @@ def predict(model, data, device, scaler):
 # print("Predictions:", predictions)
 
 
-# 10. Lift Chart
+
 def create_lift_chart(model, test_loader, device, scaler):
     """
     Creates a lift chart to evaluate the model's performance.
