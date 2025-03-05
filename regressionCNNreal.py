@@ -17,8 +17,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # 1. Load the data using sktime
-train_X, train_y = load_from_tsfile_to_dataframe("FloodModeling1_TRAIN.ts")
-test_X, test_y = load_from_tsfile_to_dataframe("FloodModeling1_TEST.ts")
+train_X, train_y = load_from_tsfile_to_dataframe("IEEEPPG_TRAIN.ts")
+test_X, test_y = load_from_tsfile_to_dataframe("IEEEPPG_TEST.ts")
 
 # Explicitly convert to numeric type (float64 is a good choice)
 train_y = train_y.astype(np.float64)
@@ -27,57 +27,73 @@ test_y = test_y.astype(np.float64)
 # 2. Hyperparameter Grid
 param_grid = {
     'num_filters': [16, 32],
-    'kernel_size': [3, 5],
-    'optimizer': ['Adam', 'SGD'],
+    'kernel_size': [(1, 3), (3, 3)],  # Added more kernel size options
+    'optimizer': ['Adam'],
+    'learning_rate': [0.001],  # Added learning rate to hyperparameter grid
     'padding': ['same'],
     'stride': [1],
-    'window_size': [266]  # Fixed to 266
+    'num_layers': [1, 2],
+    'neurons_per_layer': [32, 64]
 }
 
 # Generate all possible combinations of hyperparameters
 param_combinations = list(product(*param_grid.values()))
 param_names = list(param_grid.keys())
 
-# Function to preprocess data with a fixed window size of 266
 def preprocess_data(X):
-    X_flat = np.array([series.values.flatten() for series in X[X.columns[0]]])
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_flat)
+    X_flat = np.array([series.values for series in X[X.columns[0]]])
+    # X_flat is now (num_samples, 200, 5)
 
-    # Pad or Truncate the input to 266
-    series_length = X_scaled.shape[1]
-    if series_length < 266:
-        # Pad with zeros if shorter
-        padding_length = 266 - series_length
-        X_padded = np.pad(X_scaled, ((0, 0), (0, padding_length)), mode='constant')
-        X_reshaped = X_padded.reshape(X_padded.shape[0], 1, 266)
-    elif series_length > 266:
-        # Truncate if longer
-        X_truncated = X_scaled[:, :266]
-        X_reshaped = X_truncated.reshape(X_truncated.shape[0], 1, 266)
-    else:
-        # No change if already 266
-        X_reshaped = X_scaled.reshape(X_scaled.shape[0], 1, 266)
+    # Reshape the input to (batch_size, channels, height, width) for 2D CNN
+    X_reshaped = X_flat.reshape(X_flat.shape[0], 5, 1, 200)  # Correct Reshape
 
-    return X_reshaped, scaler
+    return X_reshaped, None  #No scaling needed
 
 
-# 3. Define the 1D CNN Model in PyTorch
-class CNN1DModel(nn.Module):
-    def __init__(self, num_filters, kernel_size, padding, stride):
-        super(CNN1DModel, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=1, out_channels=num_filters, kernel_size=kernel_size, padding=padding, stride=stride)
-        self.relu1 = nn.ReLU()
-        self.pool1 = nn.MaxPool1d(kernel_size=2)
+# 3. Define the 2D CNN Model in PyTorch
+class CNN2DModel(nn.Module):
+    def __init__(self, num_filters, kernel_size, padding, stride, num_layers, neurons_per_layer):
+        super(CNN2DModel, self).__init__()
+        self.layers = nn.ModuleList()
+
+        # Input channels for the first layer
+        in_channels = 5  # Changed to 5
+
+        for i in range(num_layers):
+            self.layers.append(nn.Conv2d(in_channels=in_channels, out_channels=num_filters, kernel_size=kernel_size, padding=padding, stride=stride))
+            self.layers.append(nn.BatchNorm2d(num_filters))  # Batch Normalization
+            self.layers.append(nn.ReLU())
+            self.layers.append(nn.MaxPool2d(kernel_size=(1, 2)))  # Pooling only along the width
+            in_channels = num_filters  # Output channels for the next layer
+
+
         self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(num_filters * 133, 64) #Dynamically calculating fc1 input
+        # Dynamically calculate fc1 input size
+        # Assuming input size after conv/pool layers is (num_filters, height, width)
+        # height = 1 (no change)
+        # width = (input_width - kernel_size + 2 * padding) / stride + 1  (after conv)
+        # width = width / 2 (after pooling)
+        input_width = 200 #Original width of the input data
+        for i in range(num_layers):
+            #Convolutional Layer Formula For "same" padding, the output size is the same as input size
+            conv_output_width = input_width
+            
+            # Calculate the output size after pooling layer
+            pooled_output_width = conv_output_width / 2 #pooling happens along the width, kernel_size=(1,2)
+            
+            #Update input_width for next layer
+            input_width = pooled_output_width
+
+        fc_input_size = num_filters * 1 * int(input_width)
+
+
+        self.fc1 = nn.Linear(fc_input_size, neurons_per_layer)
         self.relu2 = nn.ReLU()
-        self.fc2 = nn.Linear(64, 1)
+        self.fc2 = nn.Linear(neurons_per_layer, 1)
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.relu1(x)
-        x = self.pool1(x)
+        for layer in self.layers:
+            x = layer(x)
         x = self.flatten(x)
         x = self.fc1(x)
         x = self.relu2(x)
@@ -85,20 +101,36 @@ class CNN1DModel(nn.Module):
         return x
 
 
-# Function to create lift chart
-def plot_lift_chart(y_true, y_pred):
+
+def plot_lift_chart(y_true, y_pred, window_size=10):  #Added default window size
+    """
+    Generates a lift chart with a moving average for smoothing.
+
+    Args:
+        y_true (np.ndarray): Array of actual target values.
+        y_pred (np.ndarray): Array of predicted target values.
+        window_size (int): Size of the moving average window.  Adjust as needed.
+    """
     df = pd.DataFrame({'y_true': y_true, 'y_pred': y_pred})
-    df = df.sort_values('y_pred', ascending=False)
+    df = df.sort_values(['y_pred', 'y_true'], ascending=[False, False])  # Tie-breaking sort
+
     df['cumulative_actual'] = df['y_true'].cumsum()
     df['cumulative_index'] = np.arange(1, len(df) + 1)
     df['cumulative_random'] = df['cumulative_index'] * df['y_true'].sum() / len(df)
 
+    df['lift'] = df['cumulative_actual'] / df['cumulative_random']
+
+    # Calculate Moving Average
+    df['smoothed_lift'] = df['lift'].rolling(window=window_size, min_periods=1).mean()
+
     plt.figure(figsize=(10, 6))
-    plt.plot(df['cumulative_index'], df['cumulative_actual'], label='Model')
-    plt.plot(df['cumulative_index'], df['cumulative_random'], label='Random')
+    plt.plot(df['cumulative_index'], df['smoothed_lift'], label='Smoothed Lift')
+    #Optional: Plot the original lift for comparison
+    #plt.plot(df['cumulative_index'], df['lift'], label='Original Lift', alpha=0.3)
+
     plt.xlabel('Number of Predictions')
-    plt.ylabel('Cumulative Actual Value')
-    plt.title('Lift Chart')
+    plt.ylabel('Lift')
+    plt.title('Lift Chart with Moving Average')
     plt.legend()
     plt.grid(True)
     plt.show()
@@ -120,15 +152,15 @@ results = [] #List to store results for the final table
 
 for i, params in enumerate(param_combinations):
     # Unpack hyperparameters
-    num_filters, kernel_size, optimizer_name, padding, stride, window_size = params
+    num_filters, kernel_size, optimizer_name, learning_rate, padding, stride, num_layers, neurons_per_layer = params
 
     print(f"Starting training with parameter combination {i+1}/{len(param_combinations)}:")
     for name, value in zip(param_names, params):
         print(f"\t{name}: {value}")
 
     # Preprocess data
-    train_X_processed, train_scaler = preprocess_data(train_X)
-    test_X_processed, test_scaler = preprocess_data(test_X)
+    train_X_processed, _ = preprocess_data(train_X) #No scaler returned
+    test_X_processed, _ = preprocess_data(test_X)  #No scaler returned
 
     # Scale the target variables
     target_scaler = StandardScaler()
@@ -142,13 +174,13 @@ for i, params in enumerate(param_combinations):
     test_y_tensor = torch.tensor(test_y_scaled, dtype=torch.float32).to(device)
 
     # Create the model
-    model = CNN1DModel(num_filters, kernel_size, padding, stride).to(device)
+    model = CNN2DModel(num_filters, kernel_size, padding, stride, num_layers, neurons_per_layer).to(device)
 
     # Define optimizer
     if optimizer_name == 'Adam':
-        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     else:
-        optimizer = optim.SGD(model.parameters(), lr=0.01)
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate)
 
     criterion = nn.MSELoss()
 
@@ -170,6 +202,10 @@ for i, params in enumerate(param_combinations):
             loss = criterion(outputs, labels)
             optimizer.zero_grad()
             loss.backward()
+
+            # Gradient Clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Adjust max_norm as needed
+
             optimizer.step()
 
         # Validation step
