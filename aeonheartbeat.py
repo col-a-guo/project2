@@ -11,13 +11,11 @@ import itertools  # For hyperparameter combinations
 from sklearn.metrics import classification_report
 
 
-# Load the data
 X, y = load_classification("TwoPatterns")
 print("Shape of X = ", X.shape)
 print("Shape of y = ", y.shape)
 
 
-# Preprocess data
 def preprocess_data(X, y, test_size=0.2, random_state=42):
     """
     Preprocesses the time series data for CNN training.
@@ -32,19 +30,15 @@ def preprocess_data(X, y, test_size=0.2, random_state=42):
         Tuple: (X_train, X_test, y_train, y_test) as PyTorch Tensors.
     """
     # Aeon data format is (n_samples, n_channels, time_series_length)
-    # Convert to numpy array
     X = X.astype(np.float32)
 
-    # Split into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
 
-    # Convert labels to numerical values using LabelEncoder
     label_encoder = LabelEncoder()
     y_train = label_encoder.fit_transform(y_train)
     y_test = label_encoder.transform(y_test)
 
 
-    # Convert to PyTorch tensors
     X_train = torch.tensor(X_train, dtype=torch.float32)
     X_test = torch.tensor(X_test, dtype=torch.float32)
     y_train = torch.tensor(y_train, dtype=torch.long)  # Use long for labels
@@ -53,7 +47,6 @@ def preprocess_data(X, y, test_size=0.2, random_state=42):
     return X_train, X_test, y_train, y_test, len(label_encoder.classes_), label_encoder.classes_
 
 
-# Preprocess the data
 X_train, X_test, y_train, y_test, num_classes, class_names = preprocess_data(X, y)
 
 print("Shape of X_train:", X_train.shape)
@@ -62,12 +55,11 @@ print("Shape of y_train:", y_train.shape)
 print("Shape of y_test:", y_test.shape)
 
 
-# Define the CNN model
 class CNN(nn.Module):
     def __init__(self, num_classes, num_layers, kernel_size, neuron_multiplier):
         super(CNN, self).__init__()
 
-        self.layers = nn.ModuleList()  # Store layers in a ModuleList
+        self.layers = nn.ModuleList()
 
         # Determine the starting number of neurons for the first layer
         first_layer_neurons = 4 if neuron_multiplier == 8 else 8 if neuron_multiplier == 4 else 16
@@ -88,7 +80,7 @@ class CNN(nn.Module):
         # Adaptive average pooling to handle variable sequence lengths
         self.adaptive_pool = nn.AdaptiveAvgPool1d(1)
 
-        # Fully connected layer.  Important: Calculate input size based on last conv layer
+        # Fully connected layer.  calculate input size based on last conv layer
         self.fc = nn.Linear(in_channels, num_classes)
 
 
@@ -97,13 +89,11 @@ class CNN(nn.Module):
         for layer in self.layers:
             x = layer(x)
 
-        # Adaptive pooling
+        # Adaptive pooling (stride kernel calculated from output size)
         x = self.adaptive_pool(x) # Output: (N, num_neurons_last_layer, 1)
 
-        # Flatten the tensor
         x = torch.flatten(x, 1)
 
-        # Fully connected layer
         x = self.fc(x)
         return x
 
@@ -121,10 +111,9 @@ def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, d
     train_losses = []
     val_losses = []
     
-    # Check for CUDA availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    model.to(device)  # Move model to GPU if available
+    model.to(device)  
 
     for epoch in range(epochs):
         model.train()
@@ -182,7 +171,7 @@ def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, d
             y_true.extend(labels.cpu().numpy())
             y_pred.extend(predicted.cpu().numpy())
 
-    print(classification_report(y_true, y_pred, target_names=class_names))  # Output Classification Report
+    print(classification_report(y_true, y_pred, target_names=class_names)) 
 
 
     correct = 0
@@ -216,10 +205,10 @@ for num_layers, kernel_size, neuron_multiplier, optimizer_name in param_combinat
 
     # Instantiate the model with the current hyperparameters
     model = CNN(num_classes, num_layers, kernel_size, neuron_multiplier) #Passing in kernel_size
-    # Check for CUDA availability
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    model.to(device)  # Move model to GPU if available
+    model.to(device) 
 
     # Define loss function and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -230,14 +219,14 @@ for num_layers, kernel_size, neuron_multiplier, optimizer_name in param_combinat
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
-    # Data loaders (assuming they are already created)
+    # Data loaders
     train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     test_dataset = torch.utils.data.TensorDataset(X_test, y_test)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # Train and evaluate the model
+
     accuracy, train_losses, val_losses = train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, device, class_names)
 
     # Store results
@@ -263,10 +252,9 @@ print("Hyperparameter Search Complete")
 print(f"Best Hyperparameters: {best_hyperparameters}, Best Accuracy: {best_accuracy:.2f}%")
 
 
-# Plotting (Example - you might want to plot multiple results)
-# Choose which run to plot - e.g., the best one
+# Plotting 
 best_result = next(item for item in all_results if item["num_layers"] == best_hyperparameters["num_layers"] and item["neuron_multiplier"] == best_hyperparameters["neuron_multiplier"]  and item["kernel_size"] == best_hyperparameters["kernel_size"]and item["optimizer"] == best_hyperparameters["optimizer"])
-# Plotting training and validation loss
+
 plt.figure(figsize=(10, 5))
 plt.plot(best_result["train_losses"], label='Training Loss')
 plt.plot(best_result["val_losses"], label='Validation Loss')
@@ -275,5 +263,5 @@ plt.ylabel('Loss')
 plt.title('Training and Validation Loss (Best Model)')
 plt.legend()
 plt.grid(True)
-plt.savefig('best_model_loss_plot.png')  # Save the plot to a file
+plt.savefig('best_model_loss_plot.png') 
 plt.show()

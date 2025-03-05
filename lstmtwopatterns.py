@@ -6,16 +6,14 @@ import numpy as np
 from aeon.datasets import load_classification
 from sklearn.preprocessing import LabelEncoder
 import matplotlib.pyplot as plt
-import itertools  # For hyperparameter combinations
+import itertools 
 from prettytable import PrettyTable
 
-# Load the data
 X, y = load_classification("TwoPatterns")
 print("Shape of X = ", X.shape)
 print("Shape of y = ", y.shape)
 
 
-# Preprocess data
 def preprocess_data(X, y, window_size, test_size=0.2, random_state=42):
     """
     Preprocesses the time series data for LSTM training with windowing.
@@ -31,7 +29,6 @@ def preprocess_data(X, y, window_size, test_size=0.2, random_state=42):
         Tuple: (X_train, X_test, y_train, y_test) as PyTorch Tensors.
     """
     # Aeon data format is (n_samples, n_channels, time_series_length)
-    # Convert to numpy array
     X = X.astype(np.float32)
 
     # Apply windowing
@@ -43,26 +40,18 @@ def preprocess_data(X, y, window_size, test_size=0.2, random_state=42):
             start_index = series_length - window_size  # Take the last 'window_size' elements
             truncated_series = series[:, start_index:]
             X_windowed.append(truncated_series)
-        elif window_size > series_length:
-            # Pad if window size is larger
-            padding_size = window_size - series_length
-            padded_series = np.pad(series, ((0, 0), (padding_size, 0)), mode='constant')  # Pad at the beginning
-            X_windowed.append(padded_series)
         else:
-            # No change if window size is equal
+            # No change if window size is equal (should never be greater)
             X_windowed.append(series)
 
     X_windowed = np.array(X_windowed)
 
-    # Split into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(X_windowed, y, test_size=test_size, random_state=random_state)
 
-    # Convert labels to numerical values using LabelEncoder
     label_encoder = LabelEncoder()
     y_train = label_encoder.fit_transform(y_train)
     y_test = label_encoder.transform(y_test)
 
-    # Convert to PyTorch tensors
     X_train = torch.tensor(X_train, dtype=torch.float32)
     X_test = torch.tensor(X_test, dtype=torch.float32)
     y_train = torch.tensor(y_train, dtype=torch.long)  # Use long for labels
@@ -71,7 +60,6 @@ def preprocess_data(X, y, window_size, test_size=0.2, random_state=42):
     return X_train, X_test, y_train, y_test, len(label_encoder.classes_)
 
 
-# Define the LSTM model
 class LSTMModel(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, num_classes, dropout):
         super(LSTMModel, self).__init__()
@@ -100,10 +88,9 @@ def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, d
     train_losses = []
     val_losses = []
 
-    # Check for CUDA availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    model.to(device)  # Move model to GPU if available
+    model.to(device)
 
     for epoch in range(epochs):
         model.train()
@@ -165,7 +152,7 @@ def train_and_evaluate(model, optimizer, criterion, train_loader, test_loader, d
     print(f"Accuracy on the test set: {accuracy:.2f}%")
     return accuracy, train_losses, val_losses
 
-# Hyperparameter search space - LSTM specific params
+# Hyperparameter search space 
 hidden_size_options = [50, 100]
 optimizer_options = ['adam', 'SGD']
 dropout = 0.2  # Fixed dropout
@@ -181,7 +168,6 @@ all_results = []
 # Generate all combinations of hyperparameters
 param_combinations = list(itertools.product(hidden_size_options, optimizer_options, num_layers_options))
 
-# Set up PrettyTable
 table = PrettyTable()
 table.field_names = ["hidden_size", "optimizer", "num_layers", "window_size", "dropout", "Accuracy"]
 
@@ -196,10 +182,10 @@ for hidden_size, optimizer_name, num_layers in param_combinations:
     # Instantiate the model with the current hyperparameters
     input_size = X_train.shape[2]  #  time series length after windowing
     model = LSTMModel(input_size, hidden_size, num_layers, num_classes, dropout)
-    # Check for CUDA availability
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    model.to(device)  # Move model to GPU if available
+    model.to(device)  
 
     # Define loss function and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -244,8 +230,7 @@ print(f"Best Hyperparameters: {best_hyperparameters}, Best Accuracy: {best_accur
 
 print(table) # Print the PrettyTable
 
-# Plotting (Example - you might want to plot multiple results)
-# Choose which run to plot - e.g., the best one
+# Plotting 
 best_result = next(item for item in all_results if item["hidden_size"] == best_hyperparameters["hidden_size"] and item["optimizer"] == best_hyperparameters["optimizer"] and item["num_layers"] == best_hyperparameters["num_layers"] and item["window_size"] == best_hyperparameters["window_size"] and item["dropout"] == best_hyperparameters["dropout"])
 
 # Plotting training and validation loss
