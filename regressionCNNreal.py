@@ -40,43 +40,35 @@ def preprocess_data(X):
     # (num_samples, 200, 5)
 
     # (batch_size, channels, height, width) for 2D CNN
-    X_reshaped = X_flat.reshape(X_flat.shape[0], 5, 1, 200)  # Correct Reshape
+    X_reshaped = X_flat.reshape(X_flat.shape[0], 5, 1, 200)
 
     return X_reshaped, None  #No scaling needed
 
-
-# 3. Define the 2D CNN Model in PyTorch
 class CNN2DModel(nn.Module):
     def __init__(self, num_filters, kernel_size, padding, stride, num_layers, neurons_per_layer):
         super(CNN2DModel, self).__init__()
         self.layers = nn.ModuleList()
-
-        # Input channels for the first layer
-        in_channels = 5  # Changed to 5
+        # cuz 5d data
+        in_channels = 5
 
         for i in range(num_layers):
             self.layers.append(nn.Conv2d(in_channels=in_channels, out_channels=num_filters, kernel_size=kernel_size, padding=padding, stride=stride))
-            self.layers.append(nn.BatchNorm2d(num_filters))  # Batch Normalization
+            self.layers.append(nn.BatchNorm2d(num_filters))
             self.layers.append(nn.ReLU())
-            self.layers.append(nn.MaxPool2d(kernel_size=(1, 2)))  # Pooling only along the width
-            in_channels = num_filters  # Output channels for the next layer
+            self.layers.append(nn.MaxPool2d(kernel_size=(1, 2)))
+            in_channels = num_filters
 
 
         self.flatten = nn.Flatten()
-        # Dynamically calculate fc1 input size
-        # Assuming input size after conv/pool layers is (num_filters, height, width)
-        # height = 1 (no change)
-        # width = (input_width - kernel_size + 2 * padding) / stride + 1  (after conv)
-        # width = width / 2 (after pooling)
-        input_width = 200 #Original width of the input data
+        #og width
+        input_width = 200
+
         for i in range(num_layers):
-            #Convolutional Layer Formula For "same" padding, the output size is the same as input size
+    
             conv_output_width = input_width
             
-            # Calculate the output size after pooling layer
-            pooled_output_width = conv_output_width / 2 #pooling happens along the width, kernel_size=(1,2)
-            
-            #Update input_width for next layer
+            pooled_output_width = conv_output_width / 2
+
             input_width = pooled_output_width
 
         fc_input_size = num_filters * 1 * int(input_width)
@@ -97,17 +89,9 @@ class CNN2DModel(nn.Module):
 
 
 
-def plot_lift_chart(y_true, y_pred, window_size=10):  #Added default window size
-    """
-    Generates a lift chart with a moving average for smoothing.
-
-    Args:
-        y_true (np.ndarray): Array of actual target values.
-        y_pred (np.ndarray): Array of predicted target values.
-        window_size (int): Size of the moving average window.  Adjust as needed.
-    """
+def plot_lift_chart(y_true, y_pred, window_size=10):
     df = pd.DataFrame({'y_true': y_true, 'y_pred': y_pred})
-    df = df.sort_values(['y_pred', 'y_true'], ascending=[False, False])  # Tie-breaking sort
+    df = df.sort_values(['y_pred', 'y_true'], ascending=[False, False])
 
     df['cumulative_actual'] = df['y_true'].cumsum()
     df['cumulative_index'] = np.arange(1, len(df) + 1)
@@ -115,13 +99,10 @@ def plot_lift_chart(y_true, y_pred, window_size=10):  #Added default window size
 
     df['lift'] = df['cumulative_actual'] / df['cumulative_random']
 
-    # Calculate Moving Average
     df['smoothed_lift'] = df['lift'].rolling(window=window_size, min_periods=1).mean()
 
     plt.figure(figsize=(10, 6))
     plt.plot(df['cumulative_index'], df['smoothed_lift'], label='Smoothed Lift')
-    #Optional: Plot the original lift for comparison
-    #plt.plot(df['cumulative_index'], df['lift'], label='Original Lift', alpha=0.3)
 
     plt.xlabel('Number of Predictions')
     plt.ylabel('Lift')
@@ -130,7 +111,6 @@ def plot_lift_chart(y_true, y_pred, window_size=10):  #Added default window size
     plt.grid(True)
     plt.show()
 
-# 4. Hyperparameter Tuning Loop
 best_mse = float('inf')
 best_params = None
 best_model = None
@@ -138,40 +118,33 @@ test_y_original_best = None
 predicted_best = None
 
 
-# Create a table to store the results
 table = PrettyTable()
 table.field_names = param_names + ["MSE", "RMSE"]
 
-results = [] #List to store results for the final table
-
+results = []
 
 for i, params in enumerate(param_combinations):
-    # Unpack hyperparameters
+    
     num_filters, kernel_size, optimizer_name, learning_rate, padding, stride, num_layers, neurons_per_layer = params
 
     print(f"Starting training with parameter combination {i+1}/{len(param_combinations)}:")
     for name, value in zip(param_names, params):
         print(f"\t{name}: {value}")
 
-    # Preprocess data
-    train_X_processed, _ = preprocess_data(train_X) #No scaler returned
-    test_X_processed, _ = preprocess_data(test_X)  #No scaler returned
-
-    # Scale the target variables
+    train_X_processed, _ = preprocess_data(train_X)
+    test_X_processed, _ = preprocess_data(test_X)
+   
     target_scaler = StandardScaler()
     train_y_scaled = target_scaler.fit_transform(train_y.reshape(-1, 1))
     test_y_scaled = target_scaler.transform(test_y.reshape(-1, 1))
 
-    # Convert numpy arrays to torch tensors
     train_X_tensor = torch.tensor(train_X_processed, dtype=torch.float32).to(device)
     test_X_tensor = torch.tensor(test_X_processed, dtype=torch.float32).to(device)
     train_y_tensor = torch.tensor(train_y_scaled, dtype=torch.float32).to(device)
     test_y_tensor = torch.tensor(test_y_scaled, dtype=torch.float32).to(device)
 
-    # Create the model
     model = CNN2DModel(num_filters, kernel_size, padding, stride, num_layers, neurons_per_layer).to(device)
 
-    # Define optimizer
     if optimizer_name == 'Adam':
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     else:
@@ -179,12 +152,10 @@ for i, params in enumerate(param_combinations):
 
     criterion = nn.MSELoss()
 
-    # DataLoader
     batch_size = 32
     train_dataset = torch.utils.data.TensorDataset(train_X_tensor, train_y_tensor)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-    # Training loop with early stopping
     num_epochs = 20
     patience = 5
     best_val_loss = float('inf')
@@ -199,18 +170,16 @@ for i, params in enumerate(param_combinations):
             loss.backward()
 
             # Gradient Clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Adjust max_norm as needed
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer.step()
 
-        # Validation step
         model.eval()
         with torch.no_grad():
             val_outputs = model(test_X_tensor)
             val_loss = criterion(val_outputs, test_y_tensor)
         print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}, Validation Loss: {val_loss.item():.4f}')
 
-        # Early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             counter = 0
@@ -221,7 +190,6 @@ for i, params in enumerate(param_combinations):
                 break
 
 
-    # 5. Evaluate and Store Results
     model.eval()
     with torch.no_grad():
         predicted_scaled = model(test_X_tensor)
@@ -238,7 +206,6 @@ for i, params in enumerate(param_combinations):
 
     print(f"MSE: {mse:.4f}, RMSE: {rmse:.4f}")
 
-    #Add the results to the table
     results.append(list(params) + [mse, rmse])
 
     if mse < best_mse:
@@ -262,9 +229,7 @@ if best_model is not None:
 else:
     print("No model trained.")
 
-
-#Add rows to the PrettyTable
 for row in results:
     table.add_row(row)
 
-print(table) #Print the full table
+print(table)
